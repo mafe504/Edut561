@@ -71,8 +71,9 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
         // --- Configuration ---
-        const apiKey = "AIzaSyAM7kK2TNcSM82ZLwqIQ7QlcDKXORuCKB8"; // Provided by execution environment
-        const MODEL_NAME = "gemini-1.5-flash";
+        // PASTE YOUR KEY HERE ONLY IF RUNNING LOCALLY. 
+        // Leave completely blank ("") to use the website's Preview window.
+        const apiKey = "AIzaSyAM7kK2TNcSM82ZLwqIQ7QlcDKXORuCKB8"; 
 
         // --- State ---
         let scene, camera, renderer, controls;
@@ -381,15 +382,15 @@
             };
 
             try {
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-                const data = await fetchWithBackoff(url, {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const data = await fetchWithBackoff(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload)
                 });
 
                 const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!jsonText) throw new Error("Invalid response format");
+                if (!jsonText) throw new Error("Invalid response format from AI");
                 
                 const modelConfig = JSON.parse(jsonText);
                 buildThreeJsModel(modelConfig.parts);
@@ -398,7 +399,8 @@
 
             } catch (error) {
                 console.error("AI Generation failed:", error);
-                showError("Failed to generate. Please try again.");
+                // Show the exact error message on the screen to help debug API key issues
+                showError(`Error: ${error.message}`);
             }
         }
 
