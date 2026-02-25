@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>AI AR 3D Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f3f4f6; font-family: sans-serif; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-start; align-items: center; padding: 1rem; }
+        .pointer-events-auto { pointer-events: auto; }
+        
+        /* Overriding Three.js AR Button styles to fit our UI */
+        #ARButton { bottom: 20px !important; padding: 12px 24px !important; border-radius: 8px !important; font-weight: bold !important; z-index: 20 !important; }
+        
+        /* Loading Spinner */
+        .spinner { border: 4px solid rgba(0, 0, 0, 0.1); width: 36px; height: 36px; border-radius: 50%; border-left-color: #3b82f6; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    
+    <!-- Import Maps for Three.js -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <!-- 3D Canvas Background -->
+    <div id="canvas-container"></div>
+
+    <!-- User Interface -->
+    <div id="ui-layer">
+        <div class="bg-white/90 backdrop-blur-md p-6 rounded-2xl shadow-xl max-w-md w-full pointer-events-auto border border-gray-200">
+            <h1 class="text-2xl font-extrabold text-gray-800 mb-2 flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-500"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                AI AR Builder
+            </h1>
+            <p class="text-sm text-gray-600 mb-4">Describe an object. The AI will build a geometric 3D representation that you can place in the real world.</p>
+            
+            <div class="flex gap-2 mb-2">
+                <input type="text" id="prompt-input" placeholder="e.g., A red robot dog, a blue tree..." class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+                <button id="generate-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors flex items-center justify-center min-w-[100px]">
+                    Generate
+                </button>
+            </div>
+            
+            <div id="status-area" class="h-10 flex items-center justify-center mt-2">
+                <!-- Status messages and spinner will appear here -->
+            </div>
+            
+            <div id="ar-instructions" class="hidden mt-4 bg-blue-50 p-3 rounded-lg border border-blue-100 text-xs text-blue-800">
+                <strong>AR Mode Ready!</strong> Click the "ENTER AR" button below. Scan your floor until a white ring appears, then <strong>Tap the screen</strong> to place your model. Tap the model to make it interact!
+            </div>
+            
+            <div class="mt-4 pt-3 border-t border-gray-100 text-center text-[10px] text-gray-400 font-medium tracking-wide uppercase">
+                This tool was developed for EDU T561 class at HGSE 2026
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Logic -->
+    <script type="module">
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- Configuration ---
+        const apiKey = ""; // Provided by execution environment
+        const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
+
+        // --- State ---
+        let scene, camera, renderer, controls;
+        let reticle, hitTestSource, hitTestSourceRequested = false;
+        let currentModelGroup = new THREE.Group();
+        let placedModels = [];
+        let isARMode = false;
+        let raycaster, tempMatrix; // Added for AR interaction
+
+        // --- DOM Elements ---
+        const generateBtn = document.getElementById('generate-btn');
+        const promptInput = document.getElementById('prompt-input');
+        const statusArea = document.getElementById('status-area');
+        const arInstructions = document.getElementById('ar-instructions');
+        const container = document.getElementById('canvas-container');
+
+        // --- Initialize Three.js ---
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf3f4f6); // Light gray for preview
+
+            raycaster = new THREE.Raycaster();
+            tempMatrix = new THREE.Matrix4();
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+            camera.position.set(0, 2, 4);
+
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            light.position.set(0.5, 1, 0.25);
+            scene.add(light);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(2, 5, 3);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // Add a subtle grid for preview mode
+            const gridHelper = new THREE.GridHelper(10, 10, 0xcccccc, 0xe5e7eb);
+            scene.add(gridHelper);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true; // Enable WebXR
+            container.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.target.set(0, 1, 0);
+
+            // Setup AR Button and Reticle
+            document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+
+            setupReticle();
+            setupARInteraction();
+
+            // Handle resize
+            window.addEventListener('resize', onWindowResize);
+
+            // Start animation loop
+            renderer.setAnimationLoop(render);
+            
+            // Initial placeholder object
+            showStatus("Waiting for your idea...");
+        }
+
+        function setupReticle() {
+            const geometry = new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2);
+            const material = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+            reticle = new THREE.Mesh(geometry, material);
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false;
+            scene.add(reticle);
+        }
+
+        function setupARInteraction() {
+            const controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
+            
+            // Listen for AR session start/end to hide/show UI and background
+            renderer.xr.addEventListener('sessionstart', () => {
+                isARMode = true;
+                scene.background = null; // Transparent background for AR
+                document.getElementById('ui-layer').style.display = 'none'; // Hide main UI
+                scene.children.forEach(c => {
+                    if (c instanceof THREE.GridHelper) c.visible = false;
+                });
+                
+                // Remove preview model
+                if(currentModelGroup.parent) {
+                    scene.remove(currentModelGroup);
+                }
+            });
+            
+            renderer.xr.addEventListener('sessionend', () => {
+                isARMode = false;
+                scene.background = new THREE.Color(0xf3f4f6);
+                document.getElementById('ui-layer').style.display = 'flex';
+                scene.children.forEach(c => {
+                    if (c instanceof THREE.GridHelper) c.visible = true;
+                });
+                
+                // Restore preview model
+                scene.add(currentModelGroup);
+                currentModelGroup.position.set(0, 0, 0); // Reset position for preview
+                
+                // Clear placed models
+                placedModels.forEach(m => scene.remove(m));
+                placedModels = [];
+            });
+        }
+
+        // Handle screen tap in AR mode
+        function onSelect(event) {
+            if (!isARMode) return;
+            
+            // 1. Setup raycaster from the user's tap (controller)
+            const controller = event.target;
+            tempMatrix.identity().extractRotation(controller.matrixWorld);
+            raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
+            raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
+
+            // 2. Check for intersections with existing placed models
+            const allMeshes = [];
+            placedModels.forEach(item => allMeshes.push(...item.mesh.children));
+            const intersects = raycaster.intersectObjects(allMeshes, false);
+
+            if (intersects.length > 0) {
+                // We tapped an existing object!
+                const hitMesh = intersects[0].object;
+                const hitData = placedModels.find(item => item.mesh.children.includes(hitMesh));
+                
+                if (hitData) {
+                    // Trigger interactive animation
+                    hitData.interactionTimer = 60; // 60 frames of wild animation
+                    
+                    // Give the object's parts random colors to show it was clicked
+                    hitData.mesh.children.forEach(child => {
+                        if (child.material) {
+                            child.material.color.setHex(Math.random() * 0xffffff);
+                        }
+                    });
+                    return; // Exit so we don't place a new object
+                }
+            }
+
+            // 3. If no object was tapped, check if reticle is visible (floor found) to place a NEW object
+            if (reticle.visible) {
+                // Clone the generated model
+                const newModel = currentModelGroup.clone();
+                
+                // Clone materials so colors can change independently per object
+                newModel.children.forEach(child => {
+                    if (child.isMesh && child.material) {
+                        child.material = child.material.clone();
+                    }
+                });
+
+                newModel.position.setFromMatrixPosition(reticle.matrix);
+                const baseY = newModel.position.y;
+                
+                // Scale it down slightly for AR reality
+                newModel.scale.set(0.5, 0.5, 0.5); 
+                
+                // Add a random rotation offset for variety
+                newModel.rotation.y = Math.random() * Math.PI * 2;
+                
+                scene.add(newModel);
+                placedModels.push({
+                    mesh: newModel,
+                    spinSpeed: (Math.random() - 0.5) * 0.05,
+                    bounceOffset: Math.random() * Math.PI * 2,
+                    interactionTimer: 0,
+                    baseScale: 0.5,
+                    baseY: baseY
+                });
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function render(timestamp, frame) {
+            controls.update();
+
+            // Rotate preview model slowly if not in AR
+            if (!isARMode && currentModelGroup) {
+                currentModelGroup.rotation.y += 0.005;
+            }
+
+            // Animate placed models in AR (Interactive feedback)
+            if (isARMode) {
+                placedModels.forEach(item => {
+                    if (item.interactionTimer > 0) {
+                        // INTERACTIVE STATE: Spin fast, jump, and pulse scale
+                        item.mesh.rotation.y += 0.2; 
+                        item.mesh.position.y += Math.sin(item.interactionTimer * 0.5) * 0.05; 
+                        const scalePulse = item.baseScale + Math.sin(item.interactionTimer * 0.3) * 0.2;
+                        item.mesh.scale.set(scalePulse, scalePulse, scalePulse);
+                        item.interactionTimer--;
+                    } else {
+                        // NORMAL STATE: Gentle floating
+                        item.mesh.rotation.y += item.spinSpeed;
+                        item.mesh.position.y = item.baseY + Math.sin(timestamp * 0.005 + item.bounceOffset) * 0.02;
+                        
+                        // Ease scale back to normal if it was interacting
+                        item.mesh.scale.lerp(new THREE.Vector3(item.baseScale, item.baseScale, item.baseScale), 0.1);
+                    }
+                });
+            }
+
+            // AR Hit Testing Logic
+            if (frame) {
+                const referenceSpace = renderer.xr.getReferenceSpace();
+                const session = renderer.xr.getSession();
+
+                if (hitTestSourceRequested === false) {
+                    session.requestReferenceSpace('viewer').then((referenceSpace) => {
+                        session.requestHitTestSource({ space: referenceSpace }).then((source) => {
+                            hitTestSource = source;
+                        });
+                    });
+                    session.addEventListener('end', () => {
+                        hitTestSourceRequested = false;
+                        hitTestSource = null;
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource) {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                    } else {
+                        reticle.visible = false;
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // --- AI API Logic ---
+        const delay = (ms) => new Promise(res => setTimeout(res, ms));
+
+        async function fetchWithBackoff(url, options, retries = 5) {
+            const delays = [1000, 2000, 4000, 8000, 16000];
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        const errText = await response.text();
+                        throw new Error(`HTTP error! status: ${response.status} - ${errText}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    await delay(delays[i]);
+                }
+            }
+        }
+
+        async function generate3DModel(prompt) {
+            showLoading();
+            
+            const systemPrompt = `You are a 3D Architect API. The user will ask for an object. Your job is to construct a simplified, geometric representation of that object using basic 3D shapes.
+            Return a JSON object containing an array of 'parts'. You must use 3 to 15 parts to build the object.
+            Available shapes: "box", "sphere", "cylinder", "cone".
+            Provide position [x,y,z] relative to the center (0,0,0). Y is UP.
+            Provide scale [x,y,z] for dimensions.
+            Colors must be valid Hex codes.`;
+
+            const schema = {
+                type: "OBJECT",
+                properties: {
+                    parts: {
+                        type: "ARRAY",
+                        items: {
+                            type: "OBJECT",
+                            properties: {
+                                shape: { type: "STRING" },
+                                color: { type: "STRING" },
+                                position: { type: "ARRAY", items: { type: "NUMBER" } },
+                                scale: { type: "ARRAY", items: { type: "NUMBER" } }
+                            },
+                            required: ["shape", "color", "position", "scale"]
+                        }
+                    }
+                },
+                required: ["parts"]
+            };
+
+            const payload = {
+                contents: [{ parts: [{ text: `Build a 3D model of: ${prompt}. Make it rest on the ground (y=0 is the floor).` }] }],
+                systemInstruction: { parts: [{ text: systemPrompt }] },
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: schema
+                }
+            };
+
+            try {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
+                const data = await fetchWithBackoff(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!jsonText) throw new Error("Invalid response format");
+                
+                const modelConfig = JSON.parse(jsonText);
+                buildThreeJsModel(modelConfig.parts);
+                showSuccess("Generation complete! Preview below.");
+                arInstructions.classList.remove('hidden');
+
+            } catch (error) {
+                console.error("AI Generation failed:", error);
+                showError("Failed to generate. Please try again.");
+            }
+        }
+
+        // --- Model Building Logic ---
+        function buildThreeJsModel(parts) {
+            // Remove old model
+            scene.remove(currentModelGroup);
+            currentModelGroup = new THREE.Group();
+
+            const geometries = {
+                'box': new THREE.BoxGeometry(1, 1, 1),
+                'sphere': new THREE.SphereGeometry(0.5, 32, 16),
+                'cylinder': new THREE.CylinderGeometry(0.5, 0.5, 1, 32),
+                'cone': new THREE.ConeGeometry(0.5, 1, 32)
+            };
+
+            parts.forEach(part => {
+                const geoName = part.shape.toLowerCase();
+                const geometry = geometries[geoName] || geometries['box']; // fallback
+                
+                const material = new THREE.MeshStandardMaterial({ 
+                    color: part.color,
+                    roughness: 0.4,
+                    metalness: 0.1
+                });
+                
+                const mesh = new THREE.Mesh(geometry, material);
+                
+                mesh.position.set(part.position[0], part.position[1], part.position[2]);
+                mesh.scale.set(part.scale[0], part.scale[1], part.scale[2]);
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+                
+                currentModelGroup.add(mesh);
+            });
+
+            // Center and scale the generated group to fit nicely in the preview
+            const box = new THREE.Box3().setFromObject(currentModelGroup);
+            const center = box.getCenter(new THREE.Vector3());
+            currentModelGroup.position.sub(center); // Center it
+            currentModelGroup.position.y += (box.max.y - box.min.y) / 2; // Move up to rest on grid
+
+            scene.add(currentModelGroup);
+            
+            // Adjust camera to view the new object
+            controls.target.set(0, currentModelGroup.position.y, 0);
+            camera.position.set(0, currentModelGroup.position.y + 2, 4);
+        }
+
+        // --- UI Helpers ---
+        function showLoading() {
+            generateBtn.disabled = true;
+            generateBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            statusArea.innerHTML = `<div class="flex items-center gap-3 text-blue-600 font-medium"><div class="spinner"></div> Assembling 3D Model...</div>`;
+            arInstructions.classList.add('hidden');
+        }
+
+        function showSuccess(msg) {
+            generateBtn.disabled = false;
+            generateBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            statusArea.innerHTML = `<span class="text-green-600 font-semibold flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg> ${msg}</span>`;
+        }
+
+        function showError(msg) {
+            generateBtn.disabled = false;
+            generateBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+            statusArea.innerHTML = `<span class="text-red-500 font-semibold flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg> ${msg}</span>`;
+        }
+
+        function showStatus(msg) {
+            statusArea.innerHTML = `<span class="text-gray-500">${msg}</span>`;
+        }
+
+        // --- Event Listeners ---
+        generateBtn.addEventListener('click', () => {
+            const prompt = promptInput.value.trim();
+            if (prompt) generate3DModel(prompt);
+        });
+
+        promptInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const prompt = promptInput.value.trim();
+                if (prompt) generate3DModel(prompt);
+            }
+        });
+
+        // Initialize the app
+        init();
+
+    </script>
+</body>
+</html>
