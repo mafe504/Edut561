@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>AI AR 3D Builder</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://js.puter.com/v2/"></script>
     <style>
         body { margin: 0; overflow: hidden; background-color: #f3f4f6; font-family: sans-serif; }
         #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
@@ -69,12 +70,6 @@
         import * as THREE from 'three';
         import { ARButton } from 'three/addons/webxr/ARButton.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-
-        // --- Configuration ---
-        // MUST BE EMPTY ("") IN THIS PREVIEW ENVIRONMENT. 
-        // Do not paste your personal API key here while testing in the browser.
-        const apiKey = "AIzaSyAM7kK2TNcSM82ZLwqIQ7QlcDKXORuCKB8"; 
-        const MODEL_NAME = "gemini-2.5-flash-preview-09-2025";
 
         // --- State ---
         let scene, camera, renderer, controls;
@@ -324,78 +319,42 @@
         }
 
         // --- AI API Logic ---
-        const delay = (ms) => new Promise(res => setTimeout(res, ms));
-
-        async function fetchWithBackoff(url, options, retries = 5) {
-            const delays = [1000, 2000, 4000, 8000, 16000];
-            for (let i = 0; i < retries; i++) {
-                try {
-                    const response = await fetch(url, options);
-                    if (!response.ok) {
-                        const errText = await response.text();
-                        throw new Error(`HTTP error! status: ${response.status} - ${errText}`);
-                    }
-                    return await response.json();
-                } catch (error) {
-                    if (i === retries - 1) throw error;
-                    await delay(delays[i]);
-                }
-            }
-        }
-
         async function generate3DModel(prompt) {
             showLoading();
             
-            const systemPrompt = `You are a 3D Architect API. The user will ask for an object. Your job is to construct a simplified, geometric representation of that object using basic 3D shapes.
-            Return a JSON object containing an array of 'parts'. You must use 3 to 15 parts to build the object.
+            const combinedPrompt = `You are a 3D Architect API. Build a 3D model of: ${prompt}. Make it rest on the ground (y=0 is the floor).
+            Your job is to construct a simplified, geometric representation of that object using basic 3D shapes.
+            You MUST return ONLY a valid JSON object containing an array of 'parts'. You must use 3 to 15 parts to build the object.
             Available shapes: "box", "sphere", "cylinder", "cone".
             Provide position [x,y,z] relative to the center (0,0,0). Y is UP.
             Provide scale [x,y,z] for dimensions.
-            Colors must be valid Hex codes.`;
-
-            const schema = {
-                type: "OBJECT",
-                properties: {
-                    parts: {
-                        type: "ARRAY",
-                        items: {
-                            type: "OBJECT",
-                            properties: {
-                                shape: { type: "STRING" },
-                                color: { type: "STRING" },
-                                position: { type: "ARRAY", items: { type: "NUMBER" } },
-                                scale: { type: "ARRAY", items: { type: "NUMBER" } }
-                            },
-                            required: ["shape", "color", "position", "scale"]
-                        }
-                    }
-                },
-                required: ["parts"]
-            };
-
-            const payload = {
-                contents: [{ parts: [{ text: `Build a 3D model of: ${prompt}. Make it rest on the ground (y=0 is the floor).` }] }],
-                systemInstruction: { parts: [{ text: systemPrompt }] },
-                generationConfig: {
-                    responseMimeType: "application/json",
-                    responseSchema: schema
-                }
-            };
+            Colors must be valid Hex codes.
+            
+            Respond ONLY with valid JSON and NO markdown blocks or explanations. Example format:
+            {
+              "parts": [
+                { "shape": "box", "color": "#ff0000", "position": [0, 0.5, 0], "scale": [1, 1, 1] }
+              ]
+            }`;
 
             try {
-                // Using the specific model expected by the Canvas environment authentication
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-                
-                const data = await fetchWithBackoff(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                // Using Puter.js AI chat instead of raw fetch
+                const response = await puter.ai.chat(combinedPrompt, {
+                    model: 'gemini-3.1-pro-preview'
                 });
 
-                const jsonText = data.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (!jsonText) throw new Error("Invalid response format from AI");
+                // Extract string from response (handling potential object formats)
+                let jsonText = typeof response === 'string' ? response : (response.text || response.message?.content);
                 
+                // Clean up potential markdown code blocks if the AI includes them
+                jsonText = jsonText.replace(/```json/gi, '').replace(/```/g, '').trim();
+
                 const modelConfig = JSON.parse(jsonText);
+                
+                if (!modelConfig || !modelConfig.parts) {
+                    throw new Error("Invalid response format from AI. Missing 'parts' array.");
+                }
+                
                 buildThreeJsModel(modelConfig.parts);
                 showSuccess("Generation complete! Preview below.");
                 arInstructions.classList.remove('hidden');
