@@ -382,8 +382,10 @@
             };
 
             try {
-                // USING PREVIEW MODEL which is required for the empty API key in this environment
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                // Dynamically select the model: Use public 1.5-flash if user provides a key, 
+                // otherwise use the preview model for the environment magic key.
+                const modelName = apiKey ? "gemini-1.5-flash" : "gemini-2.5-flash-preview-09-2025";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
                 
                 const data = await fetchWithBackoff(apiUrl, {
                     method: 'POST',
