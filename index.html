@@ -382,7 +382,9 @@
             };
 
             try {
+                // USING PREVIEW MODEL which is required for the empty API key in this environment
                 const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                
                 const data = await fetchWithBackoff(apiUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
