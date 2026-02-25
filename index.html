@@ -9,7 +9,16 @@
     <style>
         body { margin: 0; overflow: hidden; background-color: #f3f4f6; font-family: sans-serif; }
         #canvas-container { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 1; }
-        #ui-layer { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: flex-start; align-items: center; padding: 1rem; }
+        
+        /* Modified UI Layer to sit at the bottom */
+        #ui-layer { 
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; 
+            pointer-events: none; display: flex; flex-direction: column; 
+            justify-content: flex-end; /* Anchor to bottom */
+            align-items: center; padding: 1rem; 
+            padding-bottom: 6rem; /* Leave room for the AR button */
+        }
+        
         .pointer-events-auto { pointer-events: auto; }
         
         /* Overriding Three.js AR Button styles to fit our UI */
@@ -94,8 +103,10 @@
             raycaster = new THREE.Raycaster();
             tempMatrix = new THREE.Matrix4();
 
-            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-            camera.position.set(0, 2, 4);
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
+            
+            // Pulled camera further back (Z from 4 to 10) so the object looks smaller on screen
+            camera.position.set(0, 4, 10); 
 
             const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
             light.position.set(0.5, 1, 0.25);
@@ -232,8 +243,8 @@
                 newModel.position.setFromMatrixPosition(reticle.matrix);
                 const baseY = newModel.position.y;
                 
-                // Scale it down slightly for AR reality
-                newModel.scale.set(0.5, 0.5, 0.5); 
+                // Scale it down to a tiny tabletop miniature size (0.015 = approx 1.5cm base size)
+                newModel.scale.set(0.015, 0.015, 0.015); 
                 
                 // Add a random rotation offset for variety
                 newModel.rotation.y = Math.random() * Math.PI * 2;
@@ -244,7 +255,7 @@
                     spinSpeed: (Math.random() - 0.5) * 0.05,
                     bounceOffset: Math.random() * Math.PI * 2,
                     interactionTimer: 0,
-                    baseScale: 0.5,
+                    baseScale: 0.015,
                     baseY: baseY
                 });
             }
@@ -271,7 +282,7 @@
                         // INTERACTIVE STATE: Spin fast, jump, and pulse scale
                         item.mesh.rotation.y += 0.2; 
                         item.mesh.position.y += Math.sin(item.interactionTimer * 0.5) * 0.05; 
-                        const scalePulse = item.baseScale + Math.sin(item.interactionTimer * 0.3) * 0.2;
+                        const scalePulse = item.baseScale + Math.sin(item.interactionTimer * 0.3) * (item.baseScale * 0.4);
                         item.mesh.scale.set(scalePulse, scalePulse, scalePulse);
                         item.interactionTimer--;
                     } else {
@@ -406,9 +417,9 @@
 
             scene.add(currentModelGroup);
             
-            // Adjust camera to view the new object
+            // Adjust camera to view the new object (pulled back to make it look smaller)
             controls.target.set(0, currentModelGroup.position.y, 0);
-            camera.position.set(0, currentModelGroup.position.y + 2, 4);
+            camera.position.set(0, currentModelGroup.position.y + 4, 10);
         }
 
         // --- UI Helpers ---
